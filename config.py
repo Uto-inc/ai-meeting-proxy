@@ -11,13 +11,27 @@ class Settings(BaseSettings):
     gcp_project_id: str = Field(default="local-dev-project", alias="GCP_PROJECT_ID")
     gcp_location: str = Field(default="us-central1", alias="GCP_LOCATION")
 
-    stt_language_code: str = Field(default="en-US", alias="STT_LANGUAGE_CODE")
+    stt_language_code: str = Field(default="ja-JP", alias="STT_LANGUAGE_CODE")
     stt_model: str = Field(default="latest_long", alias="STT_MODEL")
 
     gemini_model: str = Field(default="gemini-1.5-pro", alias="GEMINI_MODEL")
     api_key: str | None = Field(default=None, alias="API_KEY")
     max_audio_size_bytes: int = Field(default=10 * 1024 * 1024, alias="MAX_AUDIO_SIZE_BYTES")
     max_input_chars: int = Field(default=20_000, alias="MAX_INPUT_CHARS")
+
+    recall_api_key: str | None = Field(default=None, alias="RECALL_API_KEY")
+    recall_base_url: str = Field(default="https://us-west-2.recall.ai/api/v1", alias="RECALL_BASE_URL")
+    webhook_base_url: str | None = Field(default=None, alias="WEBHOOK_BASE_URL")
+
+    # Avatar bot settings
+    persona_profile_path: str = Field(default="knowledge/profile.md", alias="PERSONA_PROFILE_PATH")
+    knowledge_dir: str = Field(default="knowledge/docs", alias="KNOWLEDGE_DIR")
+    tts_voice_name: str = Field(default="ja-JP-Neural2-B", alias="TTS_VOICE_NAME")
+    tts_speaking_rate: float = Field(default=1.0, alias="TTS_SPEAKING_RATE")
+    bot_display_name: str = Field(default="AI Avatar", alias="BOT_DISPLAY_NAME")
+    response_triggers: str = Field(default="", alias="RESPONSE_TRIGGERS")
+    silence_timeout_seconds: int = Field(default=3, alias="SILENCE_TIMEOUT_SECONDS")
+    max_conversation_history: int = Field(default=20, alias="MAX_CONVERSATION_HISTORY")
 
     model_config = SettingsConfigDict(
         env_file=".env",

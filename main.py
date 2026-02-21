@@ -18,6 +18,7 @@ from google.api_core.exceptions import GoogleAPIError
 from google.cloud import speech
 from vertexai.generative_models import GenerativeModel
 
+from bot.router import router as bot_router
 from config import settings
 
 logging.basicConfig(
@@ -34,6 +35,8 @@ app = FastAPI(
     redoc_url="/redoc" if settings.enable_docs else None,
     openapi_url="/openapi.json" if settings.enable_docs else None,
 )
+
+app.include_router(bot_router, prefix="/bot")
 
 speech_client: speech.SpeechClient | None = None
 vertex_model: GenerativeModel | None = None
@@ -272,6 +275,22 @@ def startup_event() -> None:
         logger.exception("Failed to initialize Vertex AI")
         vertex_model = None
 
+    # Initialize TTS client
+    try:
+        from bot.tts import init_tts_client
+
+        init_tts_client()
+    except Exception:
+        logger.exception("Failed to initialize Cloud TTS client")
+
+    # Initialize avatar components (knowledge base, persona, conversation manager)
+    try:
+        from bot.router import init_avatar_components
+
+        init_avatar_components()
+    except Exception:
+        logger.exception("Failed to initialize avatar components")
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -320,7 +339,7 @@ async def transcribe(
     return JSONResponse({"transcript": transcript})
 
 
-@app.post("/chat")
+@app.post("/chat", response_model=None)
 async def chat(
     message: str = Form(...),
     meeting_context: str | None = Form(default=None),
@@ -343,7 +362,7 @@ async def chat(
     return JSONResponse({"response": response_text})
 
 
-@app.post("/meeting-proxy")
+@app.post("/meeting-proxy", response_model=None)
 async def meeting_proxy(
     audio_file: UploadFile = File(...),
     meeting_context: str | None = Form(default=None),
