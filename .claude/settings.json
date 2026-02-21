@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,json;d=sys.stdin.read();i=json.loads(d);p=i.get('tool_input',{}).get('file_path','');exec('import subprocess\\ntry:\\n subprocess.run([\\\"ruff\\\",\\\"format\\\",p],capture_output=True,timeout=10)\\n subprocess.run([\\\"ruff\\\",\\\"check\\\",\\\"--fix\\\",p],capture_output=True,timeout=10)\\nexcept Exception:\\n pass') if p.endswith('.py') else None;print(d)\""
+          }
+        ],
+        "description": "Auto-format Python files with ruff after edits"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import sys,json;d=sys.stdin.read();i=json.loads(d);c=i.get('tool_input',{}).get('content','');n=len(c.splitlines());exec('if n>800:\\n sys.stderr.write(f\\\"[Hook] WARNING: File has {n} lines (>800). Consider splitting into smaller modules.\\\\n\\\")');print(d)\""
+          }
+        ],
+        "description": "Warn when writing files over 800 lines"
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import subprocess,sys;r=subprocess.run(['git','diff','--name-only'],capture_output=True,text=True);files=[f for f in r.stdout.strip().splitlines() if f.endswith('.py')];bad=[];exec('for f in files:\\n try:\\n  with open(f) as fh:\\n   for i,line in enumerate(fh,1):\\n    s=line.strip()\\n    if s.startswith(\\\"print(\\\") or s==\\\"print()\\\":\\n     bad.append(f\\\"{f}:{i}\\\")\\n except Exception:\\n  pass');exec('if bad:\\n sys.stderr.write(\\\"[Hook] print() found in modified files: \\\"+\\\", \\\".join(bad)+\\\"\\\\nConsider using logging instead.\\\\n\\\")')\""
+          }
+        ],
+        "description": "Audit modified Python files for print() statements"
+      }
+    ]
+  }
+}

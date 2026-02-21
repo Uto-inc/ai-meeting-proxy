@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
-from main import app
 from config import settings
+from main import app
 
 
 def _set_default_test_settings() -> None:

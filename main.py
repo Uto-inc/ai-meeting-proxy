@@ -5,7 +5,8 @@ import threading
 import time
 import uuid
 from collections import Counter
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 
 import google.auth
 import vertexai
@@ -83,11 +84,7 @@ def _transcribe_audio_bytes(audio_bytes: bytes, filename: str) -> str:
         logger.exception("Speech-to-Text API call failed")
         raise HTTPException(status_code=502, detail="Speech-to-Text request failed") from exc
 
-    transcripts = [
-        result.alternatives[0].transcript
-        for result in response.results
-        if result.alternatives
-    ]
+    transcripts = [result.alternatives[0].transcript for result in response.results if result.alternatives]
     transcript = " ".join(t.strip() for t in transcripts if t.strip())
     if not transcript:
         raise HTTPException(status_code=422, detail="No transcription result returned")
@@ -137,12 +134,12 @@ def _stream_gemini_sse(prompt: str) -> Generator[str, None, None]:
 
     try:
         for chunk in vertex_model.generate_content(prompt, stream=True):
-            text = (chunk.text or "")
+            text = chunk.text or ""
             if text:
                 payload = {"delta": text}
                 yield f"data: {json.dumps(payload)}\n\n"
         yield "event: done\ndata: {}\n\n"
-    except GoogleAPIError as exc:
+    except GoogleAPIError:
         logger.exception("Streaming Gemini response failed")
         yield f"event: error\ndata: {json.dumps({'message': 'Gemini streaming failed'})}\n\n"
 
@@ -302,9 +299,7 @@ def readiness() -> JSONResponse:
 def metrics_snapshot(_: None = Depends(_auth_guard)) -> JSONResponse:
     with metrics_lock:
         requests_total = metrics["requests_total"]
-        avg_latency_ms = (
-            metrics["latency_ms_sum"] / requests_total if requests_total else 0.0
-        )
+        avg_latency_ms = metrics["latency_ms_sum"] / requests_total if requests_total else 0.0
         data = {
             "requests_total": requests_total,
             "errors_total": metrics["errors_total"],
@@ -364,10 +359,10 @@ async def meeting_proxy(
     )
 
     if stream:
+
         def event_stream() -> Generator[str, None, None]:
             yield f"event: transcript\ndata: {json.dumps({'transcript': transcript})}\n\n"
-            for chunk in _stream_gemini_sse(prompt):
-                yield chunk
+            yield from _stream_gemini_sse(prompt)
 
         return StreamingResponse(
             event_stream(),

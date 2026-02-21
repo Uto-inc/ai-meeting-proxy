@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest==8.3.4
+ruff==0.9.7
+bandit==1.8.3
