@@ -13,11 +13,13 @@ import vertexai
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from google.api_core.exceptions import GoogleAPIError
 from google.cloud import speech
 from vertexai.generative_models import GenerativeModel
 
+from bot.admin_router import router as admin_router
 from bot.router import router as bot_router
 from config import settings
 
@@ -37,6 +39,7 @@ app = FastAPI(
 )
 
 app.include_router(bot_router, prefix="/bot")
+app.include_router(admin_router)
 
 speech_client: speech.SpeechClient | None = None
 vertex_model: GenerativeModel | None = None
@@ -404,3 +407,11 @@ async def streaming_transcribe_prep(_: None = Depends(_auth_guard)) -> JSONRespo
             ),
         }
     )
+
+
+@app.get("/")
+def root_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/static/index.html")
+
+
+app.mount("/static", StaticFiles(directory="static", html=True), name="static")

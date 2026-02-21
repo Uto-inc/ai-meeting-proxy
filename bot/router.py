@@ -31,6 +31,21 @@ def _get_recall_client() -> Any:
     return RecallClient()
 
 
+def get_persona() -> Any:
+    """Return the module-level Persona singleton."""
+    return _persona
+
+
+def get_knowledge_base() -> Any:
+    """Return the module-level KnowledgeBase singleton."""
+    return _knowledge_base
+
+
+def get_conversation_manager() -> Any:
+    """Return the module-level ConversationManager singleton."""
+    return _conversation_manager
+
+
 def init_avatar_components() -> None:
     """Initialize conversation manager, knowledge base, and persona at startup."""
     global _conversation_manager, _knowledge_base, _persona
@@ -78,11 +93,13 @@ async def join_meeting(
     if enable_avatar and _conversation_manager is not None:
         _conversation_manager.get_or_create(bot_id, bot_name)
 
-    return JSONResponse({
-        "bot_id": bot_id,
-        "status": result.get("status_changes"),
-        "avatar_enabled": enable_avatar,
-    })
+    return JSONResponse(
+        {
+            "bot_id": bot_id,
+            "status": result.get("status_changes"),
+            "avatar_enabled": enable_avatar,
+        }
+    )
 
 
 @router.get("/{bot_id}/status")
@@ -194,8 +211,10 @@ async def webhook_transcript(request: Request) -> JSONResponse:
     if bot_id and _conversation_manager is not None:
         asyncio.create_task(_handle_avatar_response(bot_id, speaker, text.strip()))
 
-    return JSONResponse({
-        "status": "received",
-        "speaker": speaker,
-        "transcript_length": len(text),
-    })
+    return JSONResponse(
+        {
+            "status": "received",
+            "speaker": speaker,
+            "transcript_length": len(text),
+        }
+    )

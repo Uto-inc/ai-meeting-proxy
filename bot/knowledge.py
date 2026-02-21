@@ -26,11 +26,13 @@ class KnowledgeBase:
                 try:
                     content = path.read_text(encoding="utf-8").strip()
                     if content:
-                        self._documents.append({
-                            "filename": path.name,
-                            "path": str(path),
-                            "content": content,
-                        })
+                        self._documents.append(
+                            {
+                                "filename": path.name,
+                                "path": str(path),
+                                "content": content,
+                            }
+                        )
                         logger.info("Loaded knowledge: %s (%d chars)", path.name, len(content))
                 except Exception:
                     logger.exception("Failed to load knowledge file: %s", path)
