@@ -62,13 +62,20 @@ class ConversationSession:
                 logger.info("Response trigger: name/keyword '%s' in text", trigger)
                 return True
 
-        # Trigger 2: Direct question (Japanese question markers)
-        if text_lower.endswith("？") or text_lower.endswith("?"):
+        # Trigger 2: Direct question (Japanese question markers anywhere in text)
+        if "？" in text_lower or "?" in text_lower:
             logger.info("Response trigger: question mark detected")
             return True
         if text_lower.endswith("か") or text_lower.endswith("か。"):
             logger.info("Response trigger: Japanese question ending detected")
             return True
+
+        # Trigger 3: Request patterns (Japanese)
+        request_patterns = ["教えて", "お願い", "ください", "して", "説明"]
+        for pattern in request_patterns:
+            if pattern in text_lower:
+                logger.info("Response trigger: request pattern '%s' detected", pattern)
+                return True
 
         return False
 

@@ -98,7 +98,7 @@ class RecallClient:
 
     async def send_audio(self, bot_id: str, b64_mp3: str) -> dict[str, Any]:
         """Send base64-encoded MP3 audio to the meeting via Output Audio API."""
-        payload = {"kind": "mp3", "data": {"b64_data": b64_mp3}}
+        payload = {"kind": "mp3", "b64_data": b64_mp3}
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self._base_url}/bot/{bot_id}/output_audio",
@@ -106,6 +106,8 @@ class RecallClient:
                 headers=self._headers,
                 timeout=30,
             )
+            if resp.status_code >= 400:
+                logger.error("send_audio error %s: %s", resp.status_code, resp.text)
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
             logger.info("Audio sent to bot %s", bot_id)

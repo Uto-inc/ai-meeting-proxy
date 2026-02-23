@@ -284,6 +284,33 @@ async def webhook_transcript(request: Request) -> JSONResponse:
     logger.info("Transcript from %s: %s", speaker, text[:120])
 
     if bot_id and _conversation_manager is not None:
+        # Restore bot-meeting mapping from DB if lost (e.g. after server restart)
+        if bot_id not in _bot_meeting_map:
+            repo = getattr(request.app.state, "repo", None)
+            if repo:
+                try:
+                    meetings = await repo.list_meetings(ai_enabled_only=True)
+                    for m in meetings:
+                        if m.get("bot_id") == bot_id:
+                            _bot_meeting_map[bot_id] = m["id"]
+                            # Recreate meeting-aware session with materials
+                            from bot.meeting_conversation import MeetingConversationSession
+
+                            materials = await repo.list_materials(m["id"])
+                            if materials:
+                                session = MeetingConversationSession(bot_id, m["id"], settings.bot_display_name)
+                                session.build_materials_context_from_list(materials)
+                                _conversation_manager._sessions[bot_id] = session
+                                logger.info(
+                                    "Restored meeting session for bot %s (meeting=%s, %d materials)",
+                                    bot_id,
+                                    m["id"],
+                                    len(materials),
+                                )
+                            break
+                except Exception:
+                    logger.exception("Failed to restore bot-meeting mapping")
+
         asyncio.create_task(_handle_avatar_response(bot_id, speaker, text.strip(), request.app.state))
 
     return JSONResponse(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from config import settings
@@ -14,17 +14,22 @@ logger = logging.getLogger("meeting-proxy.scheduler")
 _scheduler_task: asyncio.Task | None = None
 
 
+def _parse_meeting_time(time_str: str) -> datetime | None:
+    """Parse meeting start_time to a timezone-aware datetime, or None for all-day events."""
+    if not time_str or "T" not in time_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
 async def _check_and_join(repo: Any) -> None:
     """Check for upcoming AI-enabled meetings and join if within 2 minutes."""
     now = datetime.now(timezone.utc)
-    window_start = now.isoformat()
-    window_end = (now + timedelta(minutes=3)).isoformat()
 
-    meetings = await repo.list_meetings(
-        from_time=window_start,
-        to_time=window_end,
-        ai_enabled_only=True,
-    )
+    meetings = await repo.list_meetings(ai_enabled_only=True)
 
     for meeting in meetings:
         if meeting["bot_status"] not in ("idle", "scheduled"):
@@ -34,10 +39,17 @@ async def _check_and_join(repo: Any) -> None:
         if not meeting_url:
             continue
 
-        start_time = datetime.fromisoformat(meeting["start_time"].replace("Z", "+00:00"))
+        start_time = _parse_meeting_time(meeting["start_time"])
+        if start_time is None:
+            continue
+
+        end_time = _parse_meeting_time(meeting.get("end_time", ""))
         time_until = (start_time - now).total_seconds()
 
-        if time_until <= 120:
+        # Join if: within 2 min before start, OR meeting is currently in progress
+        is_before_start = time_until <= 120
+        is_not_ended = end_time is None or now < end_time
+        if is_before_start and is_not_ended:
             logger.info(
                 "Auto-joining meeting '%s' (starts in %.0fs)",
                 meeting["title"],
@@ -63,11 +75,23 @@ async def _join_meeting(repo: Any, meeting: dict[str, Any]) -> None:
         await repo.update_bot_status(meeting["id"], bot_id, "joining")
         logger.info("Bot %s joining meeting %s", bot_id, meeting["id"])
 
-        from bot.router import get_conversation_manager
+        from bot.router import _bot_meeting_map, get_conversation_manager
+
+        _bot_meeting_map[bot_id] = meeting["id"]
 
         cm = get_conversation_manager()
         if cm is not None:
-            cm.get_or_create(bot_id, bot_name)
+            # Load materials and create meeting-aware session
+            materials = await repo.list_materials(meeting["id"])
+            if materials:
+                from bot.meeting_conversation import MeetingConversationSession
+
+                session = MeetingConversationSession(bot_id, meeting["id"], bot_name)
+                session.build_materials_context_from_list(materials)
+                cm._sessions[bot_id] = session
+                logger.info("Meeting session created with %d materials", len(materials))
+            else:
+                cm.get_or_create(bot_id, bot_name)
 
     except Exception:
         logger.exception("Failed to auto-join meeting %s", meeting["id"])
