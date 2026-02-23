@@ -28,6 +28,7 @@ known-first-party = ["config"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.bandit]
 exclude_dirs = ["tests"]

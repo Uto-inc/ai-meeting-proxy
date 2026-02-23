@@ -14,6 +14,12 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Security scan
+        run: bandit -r main.py config.py -q
       - name: Run tests
         env:
           GCP_PROJECT_ID: ci-test-project
