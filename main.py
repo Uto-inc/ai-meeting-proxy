@@ -122,6 +122,24 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     except Exception:
         logger.exception("Failed to initialize avatar components")
 
+    # Initialize Gemini Live Manager
+    app.state.live_manager = None
+    if settings.gemini_live_enabled:
+        try:
+            from bot.gemini_live import GeminiLiveManager
+            from bot.router import set_live_manager as set_router_live_manager
+            from bot.ws_audio import router as ws_audio_router
+            from bot.ws_audio import set_live_manager as set_ws_live_manager
+
+            live_manager = GeminiLiveManager()
+            app.state.live_manager = live_manager
+            set_router_live_manager(live_manager)
+            set_ws_live_manager(live_manager)
+            app.include_router(ws_audio_router, prefix="/bot")
+            logger.info("Gemini Live API enabled: manager initialized, WS router registered")
+        except Exception:
+            logger.exception("Failed to initialize Gemini Live Manager")
+
     # Start meeting scheduler
     if app.state.repo:
         try:
@@ -134,6 +152,13 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     yield
 
     # Shutdown
+    if app.state.live_manager is not None:
+        try:
+            await app.state.live_manager.shutdown()
+            logger.info("Gemini Live Manager shut down")
+        except Exception:
+            logger.exception("Error shutting down Gemini Live Manager")
+
     from calendar_sync.scheduler import stop_scheduler
 
     stop_scheduler()

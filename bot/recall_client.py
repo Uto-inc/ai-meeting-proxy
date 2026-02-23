@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from typing import Any
 
@@ -19,6 +21,13 @@ class RecallClient:
             "Authorization": f"Token {settings.recall_api_key}",
             "Content-Type": "application/json",
         }
+
+    def _get_bot_image_url(self) -> str | None:
+        """Build the public URL for the bot avatar image."""
+        if not settings.webhook_base_url or not settings.bot_image_filename:
+            return None
+        base = settings.webhook_base_url.rstrip("/")
+        return f"{base}/static/{settings.bot_image_filename}"
 
     async def create_bot(self, meeting_url: str) -> dict[str, Any]:
         """Send a bot to join the given meeting URL."""
@@ -68,6 +77,9 @@ class RecallClient:
             "bot_name": bot_name,
             "output_media": {"audio": {"kind": "mp3"}},
         }
+        bot_image_url = self._get_bot_image_url()
+        if bot_image_url:
+            payload["bot_image"] = bot_image_url
         if settings.webhook_base_url:
             webhook_base = settings.webhook_base_url.rstrip("/")
             payload["recording_config"] = {
@@ -111,6 +123,52 @@ class RecallClient:
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
             logger.info("Audio sent to bot %s", bot_id)
+            return data
+
+    async def create_bot_with_live_audio(self, meeting_url: str, bot_name: str, websocket_url: str) -> dict[str, Any]:
+        """Create a bot with audio_mixed_raw streaming and Output Audio for Gemini Live mode.
+
+        Configures both WebSocket (for raw audio) and webhook (for transcript) endpoints.
+        """
+        webhook_base = (settings.webhook_base_url or "").rstrip("/")
+        payload: dict[str, Any] = {
+            "meeting_url": meeting_url,
+            "bot_name": bot_name,
+            "output_media": {"audio": {"kind": "mp3"}},
+        }
+        bot_image_url = self._get_bot_image_url()
+        if bot_image_url:
+            payload["bot_image"] = bot_image_url
+        payload["recording_config"] = {
+            "transcript": {
+                "provider": {"recallai_streaming": {}},
+            },
+            "audio_mixed_raw": {},
+            "realtime_endpoints": [
+                {
+                    "type": "websocket",
+                    "url": websocket_url,
+                    "events": ["audio_mixed_raw.data"],
+                },
+                {
+                    "type": "webhook",
+                    "url": f"{webhook_base}/bot/webhook/transcript",
+                    "events": ["transcript.data", "transcript.partial_data"],
+                },
+            ],
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self._base_url}/bot",
+                json=payload,
+                headers=self._headers,
+                timeout=30,
+            )
+            if resp.status_code >= 400:
+                logger.error("Recall.ai error %s: %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+            logger.info("Bot created with live audio: id=%s name=%s", data.get("id"), bot_name)
             return data
 
     async def leave_meeting(self, bot_id: str) -> dict[str, Any]:

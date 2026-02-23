@@ -18,9 +18,16 @@ router = APIRouter(tags=["bot"])
 _conversation_manager: Any = None
 _knowledge_base: Any = None
 _persona: Any = None
+_live_manager: Any = None  # GeminiLiveManager, set by main.py
 
 # Mapping of bot_id -> meeting_id for DB persistence
 _bot_meeting_map: dict[str, str] = {}
+
+
+def set_live_manager(manager: Any) -> None:
+    """Set the module-level GeminiLiveManager reference."""
+    global _live_manager
+    _live_manager = manager
 
 
 def _require_recall_configured() -> None:
@@ -84,9 +91,19 @@ async def join_meeting(
     bot_name: str = body.get("bot_name", settings.bot_display_name)
     meeting_id: str | None = body.get("meeting_id")
 
+    use_live = enable_avatar and settings.gemini_live_enabled and _live_manager is not None
+
     client = _get_recall_client()
     try:
-        if enable_avatar:
+        if use_live:
+            # Gemini Live mode: create bot with WebSocket audio streaming
+            webhook_base = (settings.webhook_base_url or "").rstrip("/")
+            # Convert http(s) to ws(s) for WebSocket URL
+            ws_scheme = "wss" if webhook_base.startswith("https") else "ws"
+            ws_base = ws_scheme + webhook_base[webhook_base.index(":") :]
+            ws_url = f"{ws_base}/bot/ws/audio"
+            result = await client.create_bot_with_live_audio(meeting_url.strip(), bot_name, ws_url)
+        elif enable_avatar:
             result = await client.create_bot_with_audio(meeting_url.strip(), bot_name)
         else:
             result = await client.create_bot(meeting_url.strip())
@@ -96,7 +113,38 @@ async def join_meeting(
 
     bot_id = result.get("id")
 
-    if enable_avatar and _conversation_manager is not None:
+    if use_live and bot_id:
+        # Initialize Gemini Live session
+        system_instruction = await _build_live_system_instruction(request, meeting_id, bot_name)
+
+        # No-op callbacks — real audio handling happens in ws_audio.py
+        def _noop_audio(data: bytes) -> None:
+            pass
+
+        def _noop_text(data: str) -> None:
+            pass
+
+        async def _noop_turn(audio: bytes, text: str) -> None:
+            pass
+
+        try:
+            await _live_manager.create_session(
+                bot_id=bot_id,
+                system_instruction=system_instruction,
+                on_audio_chunk=_noop_audio,
+                on_turn_complete=_noop_turn,
+                on_text_chunk=_noop_text,
+            )
+        except Exception:
+            logger.exception("Failed to create Gemini Live session for bot %s", bot_id)
+
+        if meeting_id:
+            _bot_meeting_map[bot_id] = meeting_id
+            repo = getattr(request.app.state, "repo", None)
+            if repo:
+                await repo.update_bot_status(meeting_id, bot_id, "joining")
+
+    elif enable_avatar and _conversation_manager is not None:
         if meeting_id:
             # Use meeting-aware conversation session
             from bot.meeting_conversation import MeetingConversationSession
@@ -125,6 +173,7 @@ async def join_meeting(
             "bot_id": bot_id,
             "status": result.get("status_changes"),
             "avatar_enabled": enable_avatar,
+            "live_mode": use_live,
             "meeting_id": meeting_id,
         }
     )
@@ -169,6 +218,13 @@ async def leave_meeting(
         repo = getattr(request.app.state, "repo", None)
         if repo:
             await repo.update_bot_status(meeting_id, bot_id, "left")
+
+    # Clean up Gemini Live session if active
+    if _live_manager is not None and _live_manager.has_session(bot_id):
+        try:
+            await _live_manager.remove_session(bot_id)
+        except Exception:
+            logger.exception("Failed to remove live session for bot %s", bot_id)
 
     if _conversation_manager is not None:
         _conversation_manager.remove(bot_id)
@@ -285,35 +341,53 @@ async def webhook_transcript(request: Request) -> JSONResponse:
 
     logger.info("Transcript from %s: %s", speaker, text[:120])
 
-    if bot_id and _conversation_manager is not None:
-        # Restore bot-meeting mapping from DB if lost (e.g. after server restart)
-        if bot_id not in _bot_meeting_map:
+    if bot_id:
+        # When Gemini Live session is active, only persist transcript to DB — skip text pipeline
+        if _live_manager is not None and _live_manager.has_session(bot_id):
             repo = getattr(request.app.state, "repo", None)
-            if repo:
+            meeting_id = _bot_meeting_map.get(bot_id)
+            if repo and meeting_id:
                 try:
-                    meetings = await repo.list_meetings(ai_enabled_only=True)
-                    for m in meetings:
-                        if m.get("bot_id") == bot_id:
-                            _bot_meeting_map[bot_id] = m["id"]
-                            # Recreate meeting-aware session with materials
-                            from bot.meeting_conversation import MeetingConversationSession
-
-                            materials = await repo.list_materials(m["id"])
-                            if materials:
-                                session = MeetingConversationSession(bot_id, m["id"], settings.bot_display_name)
-                                session.build_materials_context_from_list(materials)
-                                _conversation_manager._sessions[bot_id] = session
-                                logger.info(
-                                    "Restored meeting session for bot %s (meeting=%s, %d materials)",
-                                    bot_id,
-                                    m["id"],
-                                    len(materials),
-                                )
-                            break
+                    await repo.add_conversation_entry(meeting_id, bot_id, speaker, text.strip(), "human")
                 except Exception:
-                    logger.exception("Failed to restore bot-meeting mapping")
+                    logger.exception("Failed to persist transcript during live session")
+            return JSONResponse(
+                {
+                    "status": "received_live",
+                    "speaker": speaker,
+                    "transcript_length": len(text),
+                }
+            )
 
-        asyncio.create_task(_handle_avatar_response(bot_id, speaker, text.strip(), request.app.state))
+        if _conversation_manager is not None:
+            # Restore bot-meeting mapping from DB if lost (e.g. after server restart)
+            if bot_id not in _bot_meeting_map:
+                repo = getattr(request.app.state, "repo", None)
+                if repo:
+                    try:
+                        meetings = await repo.list_meetings(ai_enabled_only=True)
+                        for m in meetings:
+                            if m.get("bot_id") == bot_id:
+                                _bot_meeting_map[bot_id] = m["id"]
+                                # Recreate meeting-aware session with materials
+                                from bot.meeting_conversation import MeetingConversationSession
+
+                                materials = await repo.list_materials(m["id"])
+                                if materials:
+                                    session = MeetingConversationSession(bot_id, m["id"], settings.bot_display_name)
+                                    session.build_materials_context_from_list(materials)
+                                    _conversation_manager._sessions[bot_id] = session
+                                    logger.info(
+                                        "Restored meeting session for bot %s (meeting=%s, %d materials)",
+                                        bot_id,
+                                        m["id"],
+                                        len(materials),
+                                    )
+                                break
+                    except Exception:
+                        logger.exception("Failed to restore bot-meeting mapping")
+
+            asyncio.create_task(_handle_avatar_response(bot_id, speaker, text.strip(), request.app.state))
 
     return JSONResponse(
         {
@@ -322,3 +396,29 @@ async def webhook_transcript(request: Request) -> JSONResponse:
             "transcript_length": len(text),
         }
     )
+
+
+async def _build_live_system_instruction(request: Request, meeting_id: str | None, bot_name: str) -> str:
+    """Build system instruction for Gemini Live session from persona + materials."""
+    if _persona is None:
+        return f"あなたは{bot_name}として会議に参加しています。自然な日本語で応答してください。"
+
+    materials_context = ""
+    if meeting_id:
+        repo = getattr(request.app.state, "repo", None)
+        if repo:
+            try:
+                materials = await repo.list_materials(meeting_id)
+                if materials:
+                    from bot.meeting_conversation import MeetingConversationSession
+
+                    temp_session = MeetingConversationSession(bot_id="temp", meeting_id=meeting_id, bot_name=bot_name)
+                    materials_context = temp_session.build_materials_context_from_list(materials)
+            except Exception:
+                logger.exception("Failed to load materials for live session")
+
+    knowledge_context = ""
+    if _knowledge_base is not None:
+        knowledge_context = _knowledge_base.get_context(bot_name)
+
+    return _persona.build_meeting_system_prompt(knowledge_context, materials_context)

@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     tts_voice_name: str = Field(default="ja-JP-Neural2-B", alias="TTS_VOICE_NAME")
     tts_speaking_rate: float = Field(default=1.0, alias="TTS_SPEAKING_RATE")
     bot_display_name: str = Field(default="AI Avatar", alias="BOT_DISPLAY_NAME")
+    bot_image_filename: str = Field(default="bot_avatar.jpg", alias="BOT_IMAGE_FILENAME")
     response_triggers: str = Field(default="", alias="RESPONSE_TRIGGERS")
     silence_timeout_seconds: int = Field(default=3, alias="SILENCE_TIMEOUT_SECONDS")
     max_conversation_history: int = Field(default=20, alias="MAX_CONVERSATION_HISTORY")
@@ -45,6 +46,12 @@ class Settings(BaseSettings):
 
     # Materials
     materials_upload_dir: str = Field(default="data/materials", alias="MATERIALS_UPLOAD_DIR")
+
+    # Gemini Live API
+    gemini_live_enabled: bool = Field(default=False, alias="GEMINI_LIVE_ENABLED")
+    gemini_live_model: str = Field(default="gemini-live-2.5-flash-native-audio", alias="GEMINI_LIVE_MODEL")
+    gemini_live_session_timeout_seconds: int = Field(default=840, alias="GEMINI_LIVE_SESSION_TIMEOUT")
+    gemini_live_output_sample_rate: int = Field(default=24000, alias="GEMINI_LIVE_OUTPUT_SAMPLE_RATE")
 
     model_config = SettingsConfigDict(
         env_file=".env",
