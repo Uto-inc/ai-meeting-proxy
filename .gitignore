@@ -101,6 +101,7 @@ celerybeat.pid
 
 # Environments
 .env
+sa-key.json
 .venv
 env/
 venv/

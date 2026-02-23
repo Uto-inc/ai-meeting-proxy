@@ -1,39 +1,88 @@
-# AI Meeting Proxy - Vercel + GCP PoC
+# AI Meeting Proxy
 
-FastAPI proof-of-concept for an AI meeting proxy pipeline:
+FastAPI PoC for an AI meeting proxy with avatar bot capabilities:
 - Speech-to-Text transcription (GCP Speech-to-Text)
 - Dialogue generation/summarization (Vertex AI Gemini)
-- End-to-end endpoint for `audio -> transcript -> AI response`
+- AI Avatar Bot that joins Google Meet and participates in conversations via Recall.ai
+- Text-to-Speech voice responses (GCP Cloud TTS)
+- Web admin dashboard for configuration and bot control
 
 ## Project Structure
 
-- `main.py`: FastAPI app and endpoints
-- `config.py`: environment-driven settings
-- `requirements.txt`: Python dependencies
-- `.env.example`: environment variable template
-- `docker/Dockerfile`: container image for Cloud Run
+```
+.
+├── main.py                  # FastAPI app, original endpoints, startup
+├── config.py                # Pydantic settings (.env)
+├── bot/
+│   ├── router.py            # Bot control endpoints (/bot/*)
+│   ├── admin_router.py      # Admin API endpoints (/admin/*)
+│   ├── tts.py               # Cloud TTS wrapper (Japanese)
+│   ├── knowledge.py         # File-based knowledge retrieval
+│   ├── persona.py           # Persona profile & system prompt
+│   ├── conversation.py      # Conversation session management
+│   └── recall_client.py     # Recall.ai API client
+├── knowledge/
+│   ├── profile.md           # Bot persona profile
+│   └── docs/                # Knowledge base documents
+│       └── sample.md
+├── static/
+│   └── index.html           # Web admin dashboard
+├── tests/
+│   ├── test_api_guards.py   # Auth & security boundary tests
+│   ├── test_bot.py          # Bot endpoint tests
+│   ├── test_admin.py        # Admin endpoint tests
+│   ├── test_tts.py          # TTS tests
+│   ├── test_knowledge.py    # Knowledge base tests
+│   ├── test_persona.py      # Persona tests
+│   └── test_conversation.py # Conversation tests
+├── docker/
+│   └── Dockerfile           # Cloud Run image
+├── requirements.txt
+├── requirements-dev.txt
+└── .env.example
+```
 
 ## Endpoints
 
-- `POST /transcribe`
-  - Multipart file upload (`audio_file`) for WAV/MP3
-  - Returns transcription text
-- `POST /chat`
-  - Form fields: `message`, optional `meeting_context`, optional `stream`
-  - Returns Gemini response, supports SSE streaming when `stream=true`
-- `POST /meeting-proxy`
-  - Form fields: `audio_file`, optional `meeting_context`, optional `stream`
-  - Full pipeline response with transcript + Gemini output
-- `POST /streaming/transcribe`
-  - Placeholder for real-time streaming session setup
-- `GET /health`
-  - Basic health check
-- `GET /health/ready`
-  - Dependency readiness (Speech/Vertex client state)
-- `GET /metrics`
-  - Basic request/error/latency metrics (requires API key when enabled)
+### Core API
 
-FastAPI auto docs:
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/health` | No | Liveness probe |
+| GET | `/health/ready` | No | Dependency readiness check |
+| GET | `/metrics` | Yes | Request metrics |
+| POST | `/transcribe` | Yes | Audio file -> transcription |
+| POST | `/chat` | Yes | Text -> Gemini response (optional SSE) |
+| POST | `/meeting-proxy` | Yes | Audio -> transcript -> Gemini (optional SSE) |
+| POST | `/streaming/transcribe` | Yes | Placeholder for streaming |
+
+### Bot Control (`/bot`)
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/bot/join` | Yes | Send bot to join a Google Meet |
+| GET | `/bot/{bot_id}/status` | Yes | Get bot status |
+| POST | `/bot/{bot_id}/leave` | Yes | Remove bot from meeting |
+| POST | `/bot/webhook/transcript` | No | Receive real-time transcript from Recall.ai |
+
+### Admin Management (`/admin`)
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/admin/status` | Yes | System status overview |
+| GET | `/admin/profile` | Yes | Get persona profile |
+| PUT | `/admin/profile` | Yes | Update persona profile |
+| GET | `/admin/settings` | Yes | Get TTS/bot settings |
+| PUT | `/admin/settings` | Yes | Update TTS/bot settings |
+| POST | `/admin/tts/preview` | Yes | Synthesize voice preview |
+| GET | `/admin/knowledge` | Yes | List knowledge documents |
+| GET | `/admin/knowledge/{filename}` | Yes | Get document content |
+| PUT | `/admin/knowledge/{filename}` | Yes | Create/update document |
+| DELETE | `/admin/knowledge/{filename}` | Yes | Delete document |
+
+### Web UI
+
+- Admin dashboard: `http://localhost:8000/static/index.html` (or `/`)
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
 
@@ -43,9 +92,12 @@ FastAPI auto docs:
 2. GCP project with APIs enabled:
    - Speech-to-Text API
    - Vertex AI API
-3. Service account with roles (minimum PoC):
+   - Cloud Text-to-Speech API
+3. GCP credentials with roles:
    - `roles/speech.client`
    - `roles/aiplatform.user`
+   - `roles/texttospeech.client` (for TTS)
+4. (Optional) [Recall.ai](https://recall.ai) API key for Google Meet bot integration
 
 ## Setup
 
@@ -63,14 +115,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-3. Authenticate with GCP credentials.
+3. Authenticate with GCP.
 
-Option A: Service account key file (local PoC)
-```bash
-export GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
-```
-
-Option B: ADC via gcloud
 ```bash
 gcloud auth application-default login
 ```
@@ -81,78 +127,66 @@ gcloud auth application-default login
 uvicorn main:app --reload
 ```
 
+## Configuration
+
+Core settings in `.env`:
+
+```bash
+# GCP
+GCP_PROJECT_ID=your-project-id
+GCP_LOCATION=us-central1
+GEMINI_MODEL=gemini-1.5-pro
+
+# Auth (optional - skipped when unset)
+API_KEY=your-api-key
+
+# Avatar Bot
+PERSONA_PROFILE_PATH=knowledge/profile.md
+KNOWLEDGE_DIR=knowledge/docs
+TTS_VOICE_NAME=ja-JP-Neural2-B
+TTS_SPEAKING_RATE=1.0
+BOT_DISPLAY_NAME=AI Avatar
+RESPONSE_TRIGGERS=
+MAX_CONVERSATION_HISTORY=20
+
+# Recall.ai (optional - required for Meet bot)
+RECALL_API_KEY=your-recall-api-key
+WEBHOOK_BASE_URL=https://your-deployment-url
+```
+
+## Architecture
+
+### Avatar Bot Conversation Flow
+
+```
+Google Meet
+  └─> Recall.ai Bot (listens to meeting audio)
+        └─> Webhook: real-time transcript
+              └─> /bot/webhook/transcript
+                    ├─ Keyword search in knowledge base
+                    ├─ Build system prompt (persona + knowledge context)
+                    ├─ Conversation history management
+                    ├─ Gemini generates response
+                    ├─ Cloud TTS synthesizes audio (Japanese)
+                    └─> Recall.ai sends audio back to meeting
+```
+
+### Response Triggers
+
+The bot responds when:
+- Bot name is mentioned in the utterance
+- A direct question is detected (`？`, `?`, `か`, `か。`)
+- Custom trigger keywords match (configured via `RESPONSE_TRIGGERS`)
+
 ## Security Controls
 
-- Optional API key auth with `X-API-Key` header (`API_KEY` in env)
-- Audio type validation by MIME + extension + file signature (WAV/MP3 only)
-- Upload size limit (`MAX_AUDIO_SIZE_BYTES`)
-- Text input size limit (`MAX_INPUT_CHARS`)
+- Optional API key auth with `X-API-Key` header
+- Audio type validation (MIME + extension + magic bytes)
+- Upload size limit (`MAX_AUDIO_SIZE_BYTES`, default 10 MB)
+- Text input size limit (`MAX_INPUT_CHARS`, default 20,000)
 - Request ID on every response (`X-Request-ID`)
-- Generic internal error responses (no stack traces leaked to clients)
-
-## Example Usage
-
-### 1) Transcribe audio
-
-```bash
-curl -X POST "http://localhost:8000/transcribe" \
-  -H "X-API-Key: <your-api-key>" \
-  -F "audio_file=@./sample.wav"
-```
-
-### 2) Chat with Gemini (non-streaming)
-
-```bash
-curl -X POST "http://localhost:8000/chat" \
-  -H "X-API-Key: <your-api-key>" \
-  -F 'message=Summarize today meeting decisions and actions.' \
-  -F 'meeting_context=Weekly product sync for AI meeting proxy project.'
-```
-
-### 3) Chat with Gemini (SSE streaming)
-
-```bash
-curl -N -X POST "http://localhost:8000/chat" \
-  -H "X-API-Key: <your-api-key>" \
-  -F 'message=Create concise executive summary from this transcript text.' \
-  -F 'stream=true'
-```
-
-### 4) Full meeting proxy pipeline
-
-```bash
-curl -X POST "http://localhost:8000/meeting-proxy" \
-  -H "X-API-Key: <your-api-key>" \
-  -F "audio_file=@./sample.mp3" \
-  -F 'meeting_context=Customer discovery call with enterprise client.'
-```
-
-### 5) Full pipeline with streaming AI response
-
-```bash
-curl -N -X POST "http://localhost:8000/meeting-proxy" \
-  -H "X-API-Key: <your-api-key>" \
-  -F "audio_file=@./sample.wav" \
-  -F 'meeting_context=Engineering sprint planning' \
-  -F 'stream=true'
-```
-
-## Cloud Run Deployment
-
-Build and deploy from project root:
-
-```bash
-gcloud run deploy ai-meeting-proxy-poc \
-  --source . \
-  --region us-central1 \
-  --allow-unauthenticated
-```
-
-Or build with Dockerfile:
-
-```bash
-docker build -f docker/Dockerfile -t ai-meeting-proxy-poc:latest .
-```
+- Generic error responses (no stack traces leaked)
+- Knowledge filename validation (path traversal protection)
 
 ## Tests
 
@@ -161,14 +195,26 @@ pip install -r requirements-dev.txt
 GCP_PROJECT_ID=local-test pytest -q
 ```
 
-## CI/CD Readiness
+## Cloud Run Deployment
+
+```bash
+gcloud run deploy ai-meeting-proxy-poc \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated
+```
+
+Or build with Docker:
+
+```bash
+docker build -f docker/Dockerfile -t ai-meeting-proxy-poc:latest .
+```
+
+## CI/CD
 
 - GitHub Actions workflow: `.github/workflows/ci.yml`
-- Runs unit tests on push / pull request
-- Ready to extend with lint, SAST, and container scan steps
+- Runs lint, security scan, and unit tests on push/PR
 
-## Notes
+## Tech Stack
 
-- This implementation is intentionally PoC-level and synchronous for transcription.
-- `POST /streaming/transcribe` is scaffolded for future low-latency, chunked audio transport (WebSocket/gRPC stream).
-- For production, prefer Workload Identity or attached service accounts over static key files.
+Python 3.11 | FastAPI | Pydantic | GCP Speech-to-Text | Vertex AI (Gemini) | Cloud Text-to-Speech | Recall.ai | Docker | ruff | bandit

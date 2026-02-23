@@ -24,9 +24,18 @@ class RecallClient:
         """Send a bot to join the given meeting URL."""
         payload: dict[str, Any] = {"meeting_url": meeting_url}
         if settings.webhook_base_url:
-            payload["transcription_options"] = {"provider": "meeting_captions"}
-            payload["real_time_transcription"] = {
-                "destination_url": f"{settings.webhook_base_url.rstrip('/')}/bot/webhook/transcript",
+            webhook_base = settings.webhook_base_url.rstrip("/")
+            payload["recording_config"] = {
+                "transcript": {
+                    "provider": {"recallai_streaming": {}},
+                },
+                "realtime_endpoints": [
+                    {
+                        "type": "webhook",
+                        "url": f"{webhook_base}/bot/webhook/transcript",
+                        "events": ["transcript.data", "transcript.partial_data"],
+                    },
+                ],
             }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -57,13 +66,21 @@ class RecallClient:
         payload: dict[str, Any] = {
             "meeting_url": meeting_url,
             "bot_name": bot_name,
-            "output_media": {"camera": {"kind": "none"}, "audio": {"kind": "mp3"}},
+            "output_media": {"audio": {"kind": "mp3"}},
         }
         if settings.webhook_base_url:
             webhook_base = settings.webhook_base_url.rstrip("/")
-            payload["transcription_options"] = {"provider": "meeting_captions"}
-            payload["real_time_transcription"] = {
-                "destination_url": f"{webhook_base}/bot/webhook/transcript",
+            payload["recording_config"] = {
+                "transcript": {
+                    "provider": {"recallai_streaming": {}},
+                },
+                "realtime_endpoints": [
+                    {
+                        "type": "webhook",
+                        "url": f"{webhook_base}/bot/webhook/transcript",
+                        "events": ["transcript.data", "transcript.partial_data"],
+                    },
+                ],
             }
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -72,6 +89,8 @@ class RecallClient:
                 headers=self._headers,
                 timeout=30,
             )
+            if resp.status_code >= 400:
+                logger.error("Recall.ai error %s: %s", resp.status_code, resp.text)
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
             logger.info("Bot created with audio: id=%s name=%s", data.get("id"), bot_name)

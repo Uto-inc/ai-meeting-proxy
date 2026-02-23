@@ -198,10 +198,21 @@ async def _handle_avatar_response(bot_id: str, speaker: str, text: str) -> None:
 async def webhook_transcript(request: Request) -> JSONResponse:
     """Receive real-time transcription events from Recall.ai."""
     body = await request.json()
-    transcript_data = body.get("data", {}).get("transcript", {})
-    text = transcript_data.get("original_transcript", "")
-    speaker = transcript_data.get("speaker", "unknown")
-    bot_id = body.get("data", {}).get("bot_id", "")
+    logger.info("Webhook received: event=%s", body.get("event"))
+
+    data = body.get("data", {})
+    inner = data.get("data", {})
+
+    # Build text from words array
+    words = inner.get("words", [])
+    text = "".join(w.get("text", "") for w in words)
+
+    # Speaker from participant
+    participant = inner.get("participant", {})
+    speaker = participant.get("name", "unknown")
+
+    # Bot ID
+    bot_id = data.get("bot", {}).get("id", "")
 
     if not text.strip():
         return JSONResponse({"status": "ignored", "reason": "empty transcript"})

@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import subprocess,sys;r=subprocess.run(['git','diff','--name-only'],capture_output=True,text=True);files=[f for f in r.stdout.strip().splitlines() if f.endswith('.py')];bad=[];exec('for f in files:\\n try:\\n  with open(f) as fh:\\n   for i,line in enumerate(fh,1):\\n    s=line.strip()\\n    if s.startswith(\\\"print(\\\") or s==\\\"print()\\\":\\n     bad.append(f\\\"{f}:{i}\\\")\\n except Exception:\\n  pass');exec('if bad:\\n sys.stderr.write(\\\"[Hook] print() found in modified files: \\\"+\\\", \\\".join(bad)+\\\"\\\\nConsider using logging instead.\\\\n\\\")')\""
+            "command": "python3 -c \"import subprocess,sys;r=subprocess.run(['git','diff','--name-only'],capture_output=True,text=True);files=[f for f in r.stdout.strip().splitlines() if f.endswith('.py')];bad=[];exec('for f in files:\\n try:\\n  with open(f) as fh:\\n   for i,line in enumerate(fh,1):\\n    s=line.strip()\\n    if s.startswith(\\\"print(\\\") or s==\\\"print()\\\":\\n     bad.append(f\\\"{f}:{i}\\\")\\n except Exception:\\n  pass');exec('if bad:\\n sys.stderr.write(\\\"[Hook] print() found in modified files: \\\"+\\\", \\\".join(bad)+chr(10))')\""
           }
         ],
         "description": "Audit modified Python files for print() statements"
