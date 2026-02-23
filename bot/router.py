@@ -214,12 +214,14 @@ async def _handle_avatar_response(bot_id: str, speaker: str, text: str, app_stat
         conversation_prompt = session.build_conversation_prompt(speaker, text)
         full_prompt = f"{system_prompt}\n\n{conversation_prompt}"
 
-        from vertexai.generative_models import GenerativeModel
+        from fastapi.concurrency import run_in_threadpool
+        from vertexai.generative_models import GenerationConfig, GenerativeModel
 
         from config import settings as cfg
 
         model = GenerativeModel(cfg.gemini_model)
-        response = model.generate_content(full_prompt)
+        gen_config = GenerationConfig(max_output_tokens=150, temperature=0.7)
+        response = await run_in_threadpool(model.generate_content, full_prompt, generation_config=gen_config)
         response_text = (response.text or "").strip()
 
         if not response_text:
@@ -246,7 +248,7 @@ async def _handle_avatar_response(bot_id: str, speaker: str, text: str, app_stat
             logger.warning("TTS not available, skipping audio output")
             return
 
-        b64_audio = synthesize_to_base64(clean_text)
+        b64_audio = await run_in_threadpool(synthesize_to_base64, clean_text)
 
         client = _get_recall_client()
         await client.send_audio(bot_id, b64_audio)
