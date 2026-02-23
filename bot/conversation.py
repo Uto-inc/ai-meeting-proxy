@@ -1,5 +1,7 @@
 """Conversation session and manager for avatar bot meetings."""
 
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass, field

@@ -1,5 +1,7 @@
 """Persona profile loading and Gemini system prompt construction."""
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 
@@ -95,6 +97,48 @@ class Persona:
     @property
     def raw_profile(self) -> str:
         return self._raw_profile
+
+    def build_meeting_system_prompt(self, knowledge_context: str = "", materials_context: str = "") -> str:
+        """Build a system prompt for meeting attendance with materials support."""
+        parts = [
+            f"あなたは{self._name}の代理として会議に出席しています。",
+            "ペルソナになりきって、自然な日本語で応答してください。",
+            "",
+            "--- ペルソナ情報 ---",
+            self._raw_profile,
+        ]
+
+        if knowledge_context:
+            parts.extend(
+                [
+                    "",
+                    "--- ナレッジベース ---",
+                    knowledge_context,
+                ]
+            )
+
+        if materials_context:
+            parts.extend(
+                [
+                    "",
+                    "--- 添付資料 ---",
+                    materials_context,
+                ]
+            )
+
+        parts.extend(
+            [
+                "",
+                "--- 行動ルール ---",
+                "1. 資料について質問されたら、添付資料に基づいて説明",
+                "2. 資料に答えがある → [ANSWERED] を回答の先頭に付けて直接回答",
+                "3. 判断が必要な事項（予算承認、方針決定等）→ [TAKEN_BACK]「持ち帰って確認します」",
+                "4. 資料にない情報 →「確認して後日回答します」",
+                "5. 2〜3文の簡潔な回答（音声読み上げのため）",
+            ]
+        )
+
+        return "\n".join(parts)
 
     def reload(self) -> None:
         """Reload persona profile from disk."""

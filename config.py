@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,6 +34,17 @@ class Settings(BaseSettings):
     response_triggers: str = Field(default="", alias="RESPONSE_TRIGGERS")
     silence_timeout_seconds: int = Field(default=3, alias="SILENCE_TIMEOUT_SECONDS")
     max_conversation_history: int = Field(default=20, alias="MAX_CONVERSATION_HISTORY")
+
+    # Google OAuth2 settings
+    google_client_id: str = Field(default="", alias="GOOGLE_CLIENT_ID")
+    google_client_secret: str = Field(default="", alias="GOOGLE_CLIENT_SECRET")
+    google_redirect_uri: str = Field(default="http://localhost:8000/auth/google/callback", alias="GOOGLE_REDIRECT_URI")
+
+    # Database
+    db_path: str = Field(default="data/meetings.db", alias="DB_PATH")
+
+    # Materials
+    materials_upload_dir: str = Field(default="data/materials", alias="MATERIALS_UPLOAD_DIR")
 
     model_config = SettingsConfigDict(
         env_file=".env",

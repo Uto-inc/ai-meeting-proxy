@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from typing import Any
@@ -16,6 +18,9 @@ router = APIRouter(tags=["bot"])
 _conversation_manager: Any = None
 _knowledge_base: Any = None
 _persona: Any = None
+
+# Mapping of bot_id -> meeting_id for DB persistence
+_bot_meeting_map: dict[str, str] = {}
 
 
 def _require_recall_configured() -> None:
@@ -77,6 +82,7 @@ async def join_meeting(
 
     enable_avatar: bool = body.get("enable_avatar", False)
     bot_name: str = body.get("bot_name", settings.bot_display_name)
+    meeting_id: str | None = body.get("meeting_id")
 
     client = _get_recall_client()
     try:
@@ -91,13 +97,35 @@ async def join_meeting(
     bot_id = result.get("id")
 
     if enable_avatar and _conversation_manager is not None:
-        _conversation_manager.get_or_create(bot_id, bot_name)
+        if meeting_id:
+            # Use meeting-aware conversation session
+            from bot.meeting_conversation import MeetingConversationSession
+
+            repo = getattr(request.app.state, "repo", None)
+            if repo:
+                materials = await repo.list_materials(meeting_id)
+                if materials:
+                    session = MeetingConversationSession(bot_id, meeting_id, bot_name)
+                    session.build_materials_context_from_list(materials)
+                    _conversation_manager._sessions[bot_id] = session
+                else:
+                    _conversation_manager.get_or_create(bot_id, bot_name)
+            else:
+                _conversation_manager.get_or_create(bot_id, bot_name)
+
+            _bot_meeting_map[bot_id] = meeting_id
+
+            if repo:
+                await repo.update_bot_status(meeting_id, bot_id, "joining")
+        else:
+            _conversation_manager.get_or_create(bot_id, bot_name)
 
     return JSONResponse(
         {
             "bot_id": bot_id,
             "status": result.get("status_changes"),
             "avatar_enabled": enable_avatar,
+            "meeting_id": meeting_id,
         }
     )
 
@@ -122,6 +150,7 @@ async def bot_status(
 @router.post("/{bot_id}/leave")
 async def leave_meeting(
     bot_id: str,
+    request: Request,
     _: None = Depends(_require_recall_configured),
 ) -> JSONResponse:
     """Tell a Recall.ai bot to leave the meeting."""
@@ -134,21 +163,36 @@ async def leave_meeting(
         logger.exception("Recall.ai leave_meeting failed")
         raise HTTPException(status_code=502, detail="Failed to leave meeting") from exc
 
+    # Update meeting status in DB
+    meeting_id = _bot_meeting_map.pop(bot_id, None)
+    if meeting_id:
+        repo = getattr(request.app.state, "repo", None)
+        if repo:
+            await repo.update_bot_status(meeting_id, bot_id, "left")
+
     if _conversation_manager is not None:
         _conversation_manager.remove(bot_id)
 
     return JSONResponse({"bot_id": bot_id, "detail": "Leave request sent", "result": result})
 
 
-async def _handle_avatar_response(bot_id: str, speaker: str, text: str) -> None:
+async def _handle_avatar_response(bot_id: str, speaker: str, text: str, app_state: Any = None) -> None:
     """Process transcript through conversation pipeline and send audio response."""
     if _conversation_manager is None or _knowledge_base is None or _persona is None:
         logger.warning("Avatar components not initialized, skipping response")
         return
 
     session = _conversation_manager.get_or_create(bot_id)
-
     session.add_utterance(speaker, text)
+
+    # Persist conversation to DB
+    meeting_id = _bot_meeting_map.get(bot_id)
+    repo = getattr(app_state, "repo", None) if app_state else None
+    if repo and meeting_id:
+        try:
+            await repo.add_conversation_entry(meeting_id, bot_id, speaker, text, "human")
+        except Exception:
+            logger.exception("Failed to persist conversation entry")
 
     if not session.should_respond(speaker, text):
         return
@@ -156,7 +200,17 @@ async def _handle_avatar_response(bot_id: str, speaker: str, text: str) -> None:
     session.is_responding = True
     try:
         knowledge_context = _knowledge_base.get_context(text)
-        system_prompt = _persona.build_system_prompt(knowledge_context)
+
+        # Use meeting-aware prompt if available
+        from bot.meeting_conversation import MeetingConversationSession
+
+        if isinstance(session, MeetingConversationSession):
+            system_prompt = session.build_meeting_system_prompt(
+                _persona.build_meeting_system_prompt(knowledge_context, session.materials_context)
+            )
+        else:
+            system_prompt = _persona.build_system_prompt(knowledge_context)
+
         conversation_prompt = session.build_conversation_prompt(speaker, text)
         full_prompt = f"{system_prompt}\n\n{conversation_prompt}"
 
@@ -172,8 +226,18 @@ async def _handle_avatar_response(bot_id: str, speaker: str, text: str) -> None:
             logger.warning("Gemini returned empty response for bot %s", bot_id)
             return
 
-        session.add_bot_response(response_text)
-        logger.info("Bot %s response: %s", bot_id, response_text[:120])
+        # Classify response and clean tags
+        clean_text, category = MeetingConversationSession.classify_response(response_text)
+
+        session.add_bot_response(clean_text)
+        logger.info("Bot %s response [%s]: %s", bot_id, category or "none", clean_text[:120])
+
+        # Persist bot response to DB
+        if repo and meeting_id:
+            try:
+                await repo.add_conversation_entry(meeting_id, bot_id, session.bot_name, clean_text, "bot", category)
+            except Exception:
+                logger.exception("Failed to persist bot response")
 
         from bot.tts import is_available as tts_available
         from bot.tts import synthesize_to_base64
@@ -182,7 +246,7 @@ async def _handle_avatar_response(bot_id: str, speaker: str, text: str) -> None:
             logger.warning("TTS not available, skipping audio output")
             return
 
-        b64_audio = synthesize_to_base64(response_text)
+        b64_audio = synthesize_to_base64(clean_text)
 
         client = _get_recall_client()
         await client.send_audio(bot_id, b64_audio)
@@ -220,7 +284,7 @@ async def webhook_transcript(request: Request) -> JSONResponse:
     logger.info("Transcript from %s: %s", speaker, text[:120])
 
     if bot_id and _conversation_manager is not None:
-        asyncio.create_task(_handle_avatar_response(bot_id, speaker, text.strip()))
+        asyncio.create_task(_handle_avatar_response(bot_id, speaker, text.strip(), request.app.state))
 
     return JSONResponse(
         {

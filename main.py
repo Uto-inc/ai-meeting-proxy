@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 import hmac
 import json
 import logging
+import os
 import threading
 import time
 import uuid
 from collections import Counter
 from collections.abc import Generator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import google.auth
@@ -19,27 +23,19 @@ from google.api_core.exceptions import GoogleAPIError
 from google.cloud import speech
 from vertexai.generative_models import GenerativeModel
 
+from auth.router import router as auth_router
 from bot.admin_router import router as admin_router
 from bot.router import router as bot_router
+from calendar_sync.router import router as calendar_router
 from config import settings
+from materials.router import router as materials_router
+from minutes.router import router as minutes_router
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("meeting-proxy")
-
-app = FastAPI(
-    title=settings.app_name,
-    version="0.1.0",
-    description="PoC API for Speech-to-Text + Vertex AI (Gemini) meeting proxy",
-    docs_url="/docs" if settings.enable_docs else None,
-    redoc_url="/redoc" if settings.enable_docs else None,
-    openapi_url="/openapi.json" if settings.enable_docs else None,
-)
-
-app.include_router(bot_router, prefix="/bot")
-app.include_router(admin_router)
 
 speech_client: speech.SpeechClient | None = None
 vertex_model: GenerativeModel | None = None
@@ -59,6 +55,110 @@ ALLOWED_AUDIO_TYPES = {
     "audio/mp3",
 }
 ALLOWED_AUDIO_EXTENSIONS = {"wav", "mp3"}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
+    """Application lifespan: initialize DB, GCP services, and avatar components."""
+    global speech_client, vertex_model
+
+    # Initialize database
+    try:
+        from db.repository import Repository
+        from db.schema import init_db
+
+        os.makedirs(os.path.dirname(settings.db_path) or ".", exist_ok=True)
+        db = await init_db(settings.db_path)
+        app.state.db = db
+        app.state.repo = Repository(db)
+        logger.info("Database initialized")
+    except Exception:
+        logger.exception("Failed to initialize database")
+        app.state.db = None
+        app.state.repo = None
+
+    # Initialize GCP credentials
+    try:
+        _, project = google.auth.default()
+        logger.info("GCP credentials detected (project=%s)", project)
+    except Exception as exc:
+        logger.warning("Could not validate GCP credentials at startup: %s", exc)
+
+    # Initialize Speech-to-Text
+    try:
+        speech_client = speech.SpeechClient()
+        logger.info("Speech-to-Text client initialized")
+    except Exception:
+        logger.exception("Failed to initialize Speech-to-Text client")
+        speech_client = None
+
+    # Initialize Vertex AI
+    try:
+        vertexai.init(project=settings.gcp_project_id, location=settings.gcp_location)
+        vertex_model = GenerativeModel(settings.gemini_model)
+        logger.info(
+            "Vertex AI initialized (project=%s, location=%s, model=%s)",
+            settings.gcp_project_id,
+            settings.gcp_location,
+            settings.gemini_model,
+        )
+    except Exception:
+        logger.exception("Failed to initialize Vertex AI")
+        vertex_model = None
+
+    # Initialize TTS client
+    try:
+        from bot.tts import init_tts_client
+
+        init_tts_client()
+    except Exception:
+        logger.exception("Failed to initialize Cloud TTS client")
+
+    # Initialize avatar components
+    try:
+        from bot.router import init_avatar_components
+
+        init_avatar_components()
+    except Exception:
+        logger.exception("Failed to initialize avatar components")
+
+    # Start meeting scheduler
+    if app.state.repo:
+        try:
+            from calendar_sync.scheduler import start_scheduler
+
+            start_scheduler(app.state.repo)
+        except Exception:
+            logger.exception("Failed to start meeting scheduler")
+
+    yield
+
+    # Shutdown
+    from calendar_sync.scheduler import stop_scheduler
+
+    stop_scheduler()
+
+    if app.state.db:
+        await app.state.db.close()
+        logger.info("Database connection closed")
+
+
+app = FastAPI(
+    title=settings.app_name,
+    version="0.2.0",
+    description="AI Meeting Proxy – Calendar, Materials, Minutes, and real-time meeting participation",
+    docs_url="/docs" if settings.enable_docs else None,
+    redoc_url="/redoc" if settings.enable_docs else None,
+    openapi_url="/openapi.json" if settings.enable_docs else None,
+    lifespan=lifespan,
+)
+
+app.include_router(auth_router)
+app.include_router(bot_router, prefix="/bot")
+app.include_router(admin_router)
+app.include_router(calendar_router)
+app.include_router(materials_router)
+app.include_router(minutes_router)
 
 
 def _detect_audio_encoding(filename: str) -> speech.RecognitionConfig.AudioEncoding:
@@ -246,53 +346,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled error (request_id=%s)", request.state.request_id)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
-
-
-@app.on_event("startup")
-def startup_event() -> None:
-    global speech_client, vertex_model
-
-    try:
-        _, project = google.auth.default()
-        logger.info("GCP credentials detected (project=%s)", project)
-    except Exception as exc:
-        logger.warning("Could not validate GCP credentials at startup: %s", exc)
-
-    try:
-        speech_client = speech.SpeechClient()
-        logger.info("Speech-to-Text client initialized")
-    except Exception:
-        logger.exception("Failed to initialize Speech-to-Text client")
-        speech_client = None
-
-    try:
-        vertexai.init(project=settings.gcp_project_id, location=settings.gcp_location)
-        vertex_model = GenerativeModel(settings.gemini_model)
-        logger.info(
-            "Vertex AI initialized (project=%s, location=%s, model=%s)",
-            settings.gcp_project_id,
-            settings.gcp_location,
-            settings.gemini_model,
-        )
-    except Exception:
-        logger.exception("Failed to initialize Vertex AI")
-        vertex_model = None
-
-    # Initialize TTS client
-    try:
-        from bot.tts import init_tts_client
-
-        init_tts_client()
-    except Exception:
-        logger.exception("Failed to initialize Cloud TTS client")
-
-    # Initialize avatar components (knowledge base, persona, conversation manager)
-    try:
-        from bot.router import init_avatar_components
-
-        init_avatar_components()
-    except Exception:
-        logger.exception("Failed to initialize avatar components")
 
 
 @app.get("/health")

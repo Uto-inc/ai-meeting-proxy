@@ -99,6 +99,9 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Data (SQLite DB, uploaded materials)
+data/
+
 # Environments
 .env
 sa-key.json

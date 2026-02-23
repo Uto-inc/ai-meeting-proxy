@@ -102,10 +102,11 @@ def test_webhook_receives_transcript() -> None:
 
     payload = {
         "data": {
-            "transcript": {
-                "original_transcript": "Hello everyone, let's get started.",
-                "speaker": "Alice",
-            }
+            "bot": {"id": "bot-test-1"},
+            "data": {
+                "words": [{"text": "Hello everyone, let's get started."}],
+                "participant": {"name": "Alice"},
+            },
         }
     }
     resp = client.post("/bot/webhook/transcript", json=payload)
@@ -119,7 +120,15 @@ def test_webhook_ignores_empty_transcript() -> None:
     _set_bot_test_settings()
     client = TestClient(app)
 
-    payload = {"data": {"transcript": {"original_transcript": "  ", "speaker": "Bob"}}}
+    payload = {
+        "data": {
+            "bot": {"id": "bot-test-1"},
+            "data": {
+                "words": [{"text": "  "}],
+                "participant": {"name": "Bob"},
+            },
+        }
+    }
     resp = client.post("/bot/webhook/transcript", json=payload)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
@@ -195,10 +204,10 @@ def test_webhook_with_bot_id_triggers_avatar() -> None:
 
     payload = {
         "data": {
-            "bot_id": "bot-avatar-1",
-            "transcript": {
-                "original_transcript": "これについてどう思いますか？",
-                "speaker": "Alice",
+            "bot": {"id": "bot-avatar-1"},
+            "data": {
+                "words": [{"text": "これについてどう思いますか？"}],
+                "participant": {"name": "Alice"},
             },
         }
     }
@@ -213,10 +222,11 @@ def test_webhook_without_bot_id_still_works() -> None:
 
     payload = {
         "data": {
-            "transcript": {
-                "original_transcript": "Hello everyone.",
-                "speaker": "Bob",
-            }
+            "bot": {},
+            "data": {
+                "words": [{"text": "Hello everyone."}],
+                "participant": {"name": "Bob"},
+            },
         }
     }
     resp = client.post("/bot/webhook/transcript", json=payload)

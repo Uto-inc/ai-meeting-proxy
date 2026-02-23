@@ -1,5 +1,7 @@
 """Google Cloud Text-to-Speech wrapper for Japanese voice synthesis."""
 
+from __future__ import annotations
+
 import base64
 import logging
 

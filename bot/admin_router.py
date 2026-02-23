@@ -1,5 +1,7 @@
 """Admin API endpoints for managing avatar bot configuration."""
 
+from __future__ import annotations
+
 import hmac
 import logging
 import re
