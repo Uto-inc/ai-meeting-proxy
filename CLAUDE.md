@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AI Meeting Proxy is a FastAPI PoC that chains GCP Speech-to-Text transcription with Vertex AI Gemini analysis. It accepts audio uploads, transcribes them, and generates meeting summaries/action items via an LLM. Streaming responses use Server-Sent Events (SSE).
+AI Meeting Proxy is a FastAPI application for AI-powered meeting participation. Google Calendar連携でAI自動参加、資料ベースの質問応答（回答/持ち帰り分類）、Gemini議事録生成、Google Docsエクスポートを提供。SQLiteでデータ永続化、Recall.ai経由でGoogle Meetに参加。
 
 ## Commands
 
@@ -18,7 +18,7 @@ pip install -r requirements-dev.txt
 # Dev server (auto-reload)
 uvicorn main:app --reload
 
-# Run tests
+# Run tests (84 tests)
 GCP_PROJECT_ID=local-test pytest -q
 
 # Lint & format
@@ -43,6 +43,7 @@ docker build -f docker/Dockerfile -t ai-meeting-proxy-poc:latest .
 ## Critical Rules
 
 ### Python Conventions
+- Python 3.9+ compatible — use `from __future__ import annotations` in all modules
 - Type hints on all function signatures
 - `logging.getLogger()` instead of `print()` — hooks will flag print() in modified files
 - f-strings for formatting, never `%` or `.format()`
@@ -69,43 +70,41 @@ docker build -f docker/Dockerfile -t ai-meeting-proxy-poc:latest .
 
 ## Architecture
 
-**Single-file API** — all endpoints and logic live in `main.py` (~393 lines). Configuration is in `config.py` (pydantic-settings, reads from `.env`).
+**Multi-module API** with `main.py` as the entrypoint. Uses async lifespan for DB/scheduler initialization.
+
+### Modules
+
+| Module | Purpose |
+|--------|---------|
+| `db/` | SQLite schema + async CRUD repository (5 tables: oauth_tokens, meetings, materials, conversation_log, minutes) |
+| `auth/` | Google OAuth2 flow (login, callback, status, revoke) |
+| `calendar_sync/` | Google Calendar API + 60s auto-join scheduler |
+| `materials/` | File upload, Google Drive linking, text extraction (PDF/MD/TXT) |
+| `minutes/` | Gemini minutes generation + Google Docs export |
+| `bot/` | Recall.ai bot control, meeting conversation with material-aware response classification |
 
 ### Key components in `main.py`
 
-- **Global state**: `speech_client` (GCP Speech-to-Text) and `vertex_model` (Gemini GenerativeModel), initialized in `startup_event()`; gracefully `None` if GCP unavailable
-- **Auth**: `_auth_guard` dependency — optional HMAC API key via `X-API-Key` header (skipped when `API_KEY` env is unset)
-- **Audio validation**: triple-check of MIME type + extension + magic bytes (`_validate_audio_file`); streaming size-limited reads (`_read_upload_limited`)
-- **Text input**: `_normalize_text_input` strips and enforces `MAX_INPUT_CHARS`
-- **Middleware**: `request_metrics_middleware` attaches `X-Request-ID` UUID, tracks latency/errors in thread-safe in-memory `metrics` dict
-- **SSE streaming**: `_stream_gemini_sse` generator yields `data:` lines with `{"delta": ...}` chunks, ends with `event: done`
-
-### Endpoints
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | Liveness probe (no auth) |
-| GET | `/health/ready` | Dependency readiness check (no auth) |
-| GET | `/metrics` | In-memory request metrics (auth required) |
-| POST | `/transcribe` | Audio file -> transcription text |
-| POST | `/chat` | Text message -> Gemini response (optional SSE) |
-| POST | `/meeting-proxy` | Audio -> transcription -> Gemini (optional SSE) |
-| POST | `/streaming/transcribe` | Placeholder for future WebSocket/gRPC streaming |
+- **Lifespan**: async context manager initializes DB, GCP services, TTS, avatar, scheduler; cleans up on shutdown
+- **App state**: `repo` (Repository), `speech_client`, `vertex_model` stored on `app.state`
+- **Auth**: `_auth_guard` dependency — optional HMAC API key via `X-API-Key` header
+- **Routers**: auth, bot, admin, calendar, materials, minutes — all registered in main
 
 ### Config (`config.py`)
 
-Pydantic `BaseSettings` subclass loading from `.env`. Key settings: `GCP_PROJECT_ID`, `GCP_LOCATION`, `GEMINI_MODEL`, `STT_LANGUAGE_CODE`, `API_KEY`, `MAX_AUDIO_SIZE_BYTES` (default 10MB), `MAX_INPUT_CHARS` (default 20,000).
+Pydantic `BaseSettings` subclass loading from `.env`. Key settings: `GCP_PROJECT_ID`, `GCP_LOCATION`, `GEMINI_MODEL`, `API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DB_PATH`, `MATERIALS_UPLOAD_DIR`.
 
 ## Testing
 
-Tests are in `tests/test_api_guards.py` — 4 unit tests covering security boundaries (auth, file size, magic bytes, input length). Tests use `fastapi.testclient.TestClient` and mutate `settings` directly to avoid GCP calls.
+84 tests across 12 test files covering: API guards, bot endpoints, database CRUD, calendar sync, text extraction, conversation classification, minutes generation, admin, TTS, knowledge, persona, conversation.
 
 ### Testing Conventions
 - Test files: `tests/test_<module>.py`
 - Test functions: `def test_<behavior>() -> None:`
 - Use `_set_default_test_settings()` to reset shared state before each test
 - Mock GCP services via settings mutation — no real API calls in tests
+- DB tests use `tempfile.TemporaryDirectory()` with `aiosqlite`
 
 ## Tech Stack
 
-Python 3.11 | FastAPI | Pydantic | GCP Speech-to-Text | Vertex AI (Gemini) | Docker (Cloud Run target) | ruff (lint/format) | bandit (security scan)
+Python 3.9+ | FastAPI | Pydantic | GCP Speech-to-Text | Vertex AI (Gemini) | Cloud TTS | Google Calendar/Drive/Docs API | Recall.ai | SQLite (aiosqlite) | PyPDF2 | Docker | ruff | bandit
