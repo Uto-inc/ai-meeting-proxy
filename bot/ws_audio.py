@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -178,11 +179,28 @@ async def _send_audio_responses(bot_id: str, pending_sends: asyncio.Queue[tuple[
                 logger.exception("Failed to persist bot response (bot=%s)", bot_id)
 
 
+_TAKEN_BACK_PATTERN = re.compile(r"持ち帰|確認して|検討し|後日|本人に確認")
+
+
+def _classify_by_content(text: str) -> str | None:
+    """Fallback classification based on response content when tags are absent.
+
+    Returns 'taken_back', 'answered', or None (if text is too short/empty).
+    """
+    if not text or len(text.strip()) < 5:
+        return None
+    if _TAKEN_BACK_PATTERN.search(text):
+        return "taken_back"
+    return "answered"
+
+
 async def _persist_bot_response(bot_id: str, text: str, app: Any) -> None:
     """Classify and persist bot's text response to the database."""
     from bot.router import _bot_meeting_map
 
     clean_text, category = MeetingConversationSession.classify_response(text)
+    if category is None:
+        category = _classify_by_content(clean_text)
 
     meeting_id = _bot_meeting_map.get(bot_id)
     repo = getattr(getattr(app, "state", None), "repo", None)

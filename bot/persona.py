@@ -140,6 +140,64 @@ class Persona:
 
         return "\n".join(parts)
 
+    def build_live_system_prompt(self, knowledge_context: str = "", materials_context: str = "") -> str:
+        """Build a system prompt optimized for Gemini Live API voice output.
+
+        Unlike build_meeting_system_prompt(), this prompt:
+        - Does not use section dividers (--- ...) that could be read aloud
+        - Does not include [ANSWERED]/[TAKEN_BACK] classification tags
+        - Explicitly prohibits vague/generic responses
+        - Encourages proactive, material-based answers
+        """
+        parts = [
+            f"あなたは{self._name}の代理として会議に出席しています。",
+            f"{self._name}になりきって、自然な日本語で音声応答してください。",
+            "",
+            "【ペルソナ情報】",
+            self._raw_profile,
+        ]
+
+        if knowledge_context:
+            parts.extend(
+                [
+                    "",
+                    "【ナレッジベース】",
+                    knowledge_context,
+                ]
+            )
+
+        if materials_context:
+            parts.extend(
+                [
+                    "",
+                    "【添付資料】",
+                    "以下の資料の内容を把握しています。質問されたら具体的な数値や内容を引用して回答してください。",
+                    materials_context,
+                ]
+            )
+
+        parts.extend(
+            [
+                "",
+                "【応答ルール】",
+                f"1. {self._name}の口調・専門性に合わせて応答する",
+                "2. 資料について質問されたら、添付資料の具体的な内容を引用して回答する",
+                "3. 判断が必要な事項（予算承認、方針決定等）は「持ち帰って本人に確認します」と答える",
+                "4. 資料にない情報は「確認して後日回答します」と答える",
+                "5. 知らないことは正直に「わかりません」と答える",
+                "6. 2〜3文の簡潔な回答を心がける",
+                "7. 自然な会話体で話す（書き言葉は避ける）",
+                "",
+                "【禁止事項】",
+                "以下のような曖昧・汎用的な応答は絶対に避けてください:",
+                "「はい、何でしょうか」「どのようなご用件でしょうか」「何かお手伝いできますか」",
+                "「ご質問をどうぞ」「お聞きしています」",
+                "会議の参加者として、具体的な議題や資料に基づいて積極的に会話に参加してください。",
+            ]
+        )
+
+        return "\n".join(parts)
+
     def reload(self) -> None:
         """Reload persona profile from disk."""
         self._load_profile()

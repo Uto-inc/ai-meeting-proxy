@@ -419,6 +419,18 @@ async def _build_live_system_instruction(request: Request, meeting_id: str | Non
 
     knowledge_context = ""
     if _knowledge_base is not None:
-        knowledge_context = _knowledge_base.get_context(bot_name)
+        # Search with bot name + meeting title for better knowledge retrieval
+        meeting_title = ""
+        if meeting_id:
+            repo = getattr(request.app.state, "repo", None)
+            if repo:
+                try:
+                    meeting = await repo.get_meeting(meeting_id)
+                    if meeting:
+                        meeting_title = meeting.get("title", "")
+                except Exception:
+                    logger.exception("Failed to load meeting title for knowledge search")
+        search_query = f"{bot_name} {meeting_title}".strip()
+        knowledge_context = _knowledge_base.get_context(search_query)
 
-    return _persona.build_meeting_system_prompt(knowledge_context, materials_context)
+    return _persona.build_live_system_prompt(knowledge_context, materials_context)

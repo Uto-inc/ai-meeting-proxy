@@ -103,6 +103,31 @@ def test_webhook_returns_received_live_when_live_session_active() -> None:
         router_mod._live_manager = old_live
 
 
+# --- _classify_by_content ---
+
+
+def test_classify_by_content_answered() -> None:
+    from bot.ws_audio import _classify_by_content
+
+    assert _classify_by_content("売上は前年比120%です。") == "answered"
+    assert _classify_by_content("この機能はPython 3.9以上で動作します。") == "answered"
+
+
+def test_classify_by_content_taken_back() -> None:
+    from bot.ws_audio import _classify_by_content
+
+    assert _classify_by_content("持ち帰って本人に確認します。") == "taken_back"
+    assert _classify_by_content("その件は検討して後日回答します。") == "taken_back"
+    assert _classify_by_content("確認して折り返します。") == "taken_back"
+
+
+def test_classify_by_content_empty() -> None:
+    from bot.ws_audio import _classify_by_content
+
+    assert _classify_by_content("") is None
+    assert _classify_by_content("abc") is None
+
+
 def test_webhook_falls_through_when_live_not_active() -> None:
     _set_ws_test_settings()
 

@@ -16,6 +16,10 @@ def _set_default_test_settings() -> None:
     settings.gemini_live_model = "gemini-live-2.5-flash-native-audio"
     settings.gemini_live_session_timeout_seconds = 840
     settings.gemini_live_output_sample_rate = 24000
+    settings.gemini_live_voice_name = "Kore"
+    settings.gemini_live_language_code = "ja-JP"
+    settings.gemini_live_temperature = 0.7
+    settings.gemini_live_enable_affective_dialog = True
 
 
 def _make_mock_async_iter() -> AsyncMock:
@@ -218,3 +222,30 @@ async def test_manager_create_replaces_existing() -> None:
     assert session1 is not session2
 
     await manager.shutdown()
+
+
+# --- _build_config ---
+
+
+def test_build_config_uses_settings() -> None:
+    _set_default_test_settings()
+    settings.gemini_live_voice_name = "Kore"
+    settings.gemini_live_language_code = "ja-JP"
+    settings.gemini_live_temperature = 0.5
+    settings.gemini_live_enable_affective_dialog = True
+
+    from bot.gemini_live import GeminiLiveSession
+
+    session = GeminiLiveSession(
+        bot_id="cfg-test",
+        system_instruction="Test instruction",
+        on_audio_chunk=lambda d: None,
+        on_turn_complete=lambda a, t: None,
+        on_text_chunk=lambda t: None,
+    )
+    config = session._build_config()
+
+    assert config.speech_config.voice_config.prebuilt_voice_config.voice_name == "Kore"
+    assert config.speech_config.language_code == "ja-JP"
+    assert config.generation_config.temperature == 0.5
+    assert config.enable_affective_dialog is True

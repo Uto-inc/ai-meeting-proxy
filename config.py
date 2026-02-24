@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     gemini_live_model: str = Field(default="gemini-live-2.5-flash-native-audio", alias="GEMINI_LIVE_MODEL")
     gemini_live_session_timeout_seconds: int = Field(default=840, alias="GEMINI_LIVE_SESSION_TIMEOUT")
     gemini_live_output_sample_rate: int = Field(default=24000, alias="GEMINI_LIVE_OUTPUT_SAMPLE_RATE")
+    gemini_live_voice_name: str = Field(default="Kore", alias="GEMINI_LIVE_VOICE_NAME")
+    gemini_live_language_code: str = Field(default="ja-JP", alias="GEMINI_LIVE_LANGUAGE_CODE")
+    gemini_live_temperature: float = Field(default=0.7, alias="GEMINI_LIVE_TEMPERATURE")
+    gemini_live_enable_affective_dialog: bool = Field(default=True, alias="GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG")
 
     model_config = SettingsConfigDict(
         env_file=".env",

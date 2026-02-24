@@ -94,9 +94,18 @@ class GeminiLiveSession:
             output_audio_transcription=types.AudioTranscriptionConfig(),
             system_instruction=types.Content(parts=[types.Part(text=self._system_instruction)]),
             speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede"))
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=settings.gemini_live_voice_name,
+                    ),
+                ),
+                language_code=settings.gemini_live_language_code,
+            ),
+            generation_config=types.GenerationConfig(
+                temperature=settings.gemini_live_temperature,
             ),
             session_resumption=resumption_config,
+            enable_affective_dialog=settings.gemini_live_enable_affective_dialog,
         )
 
     async def send_audio(self, pcm_bytes: bytes) -> None:
