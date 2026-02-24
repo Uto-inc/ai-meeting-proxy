@@ -105,7 +105,16 @@ async def ws_audio_bridge(websocket: WebSocket) -> None:
                 else:
                     b64_audio = inner if isinstance(inner, str) else ""
                 if b64_audio and isinstance(b64_audio, str) and session is not None:
-                    pcm_bytes = decode_b64_pcm(b64_audio)
+                    try:
+                        pcm_bytes = decode_b64_pcm(b64_audio)
+                    except Exception:
+                        logger.warning(
+                            "Failed to decode audio chunk from Recall.ai (bot=%s, event=%s)",
+                            bot_id,
+                            event,
+                            exc_info=True,
+                        )
+                        continue
                     audio_chunk_count += 1
                     if audio_chunk_count == 1:
                         logger.info(
@@ -165,10 +174,28 @@ async def _send_audio_responses(bot_id: str, pending_sends: asyncio.Queue[tuple[
             continue
 
         try:
+            playback_seconds = len(audio_data) / (settings.gemini_live_output_sample_rate * 2)
+            mute_seconds = _compute_mute_seconds(playback_seconds)
+            session = _live_manager.get_session(bot_id) if _live_manager else None
+            if session is not None:
+                # Apply a short pre-mute to avoid a race where bot audio echoes
+                # back into Gemini before output_audio API call completes.
+                session.set_mute_duration(0.5)
+
             b64_mp3 = pcm_to_mp3_b64(audio_data, sample_rate=settings.gemini_live_output_sample_rate)
             client = RecallClient()
             await client.send_audio(bot_id, b64_mp3)
-            logger.info("Live audio response sent to bot %s (%d bytes PCM)", bot_id, len(audio_data))
+
+            if session is not None:
+                session.set_mute_duration(mute_seconds)
+
+            logger.info(
+                "Live audio response sent to bot %s (%d bytes PCM, %.1fs, mute=%.1fs)",
+                bot_id,
+                len(audio_data),
+                playback_seconds,
+                mute_seconds,
+            )
         except Exception:
             logger.exception("Failed to send audio response to Recall.ai (bot=%s)", bot_id)
 
@@ -180,6 +207,14 @@ async def _send_audio_responses(bot_id: str, pending_sends: asyncio.Queue[tuple[
 
 
 _TAKEN_BACK_PATTERN = re.compile(r"持ち帰|確認して|検討し|後日|本人に確認")
+
+
+def _compute_mute_seconds(playback_seconds: float) -> float:
+    """Compute bounded echo-suppression mute duration."""
+    if playback_seconds <= 0:
+        return 0.5
+    # Keep a small tail margin, but avoid excessively long mute windows.
+    return min(max(playback_seconds + 0.6, 0.5), 12.0)
 
 
 def _classify_by_content(text: str) -> str | None:

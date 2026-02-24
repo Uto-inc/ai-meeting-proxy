@@ -342,7 +342,7 @@ async def webhook_transcript(request: Request) -> JSONResponse:
     logger.info("Transcript from %s: %s", speaker, text[:120])
 
     if bot_id:
-        # When Gemini Live session is active, only persist transcript to DB — skip text pipeline
+        # When Gemini Live session is active, persist transcript only — audio goes direct
         if _live_manager is not None and _live_manager.has_session(bot_id):
             repo = getattr(request.app.state, "repo", None)
             meeting_id = _bot_meeting_map.get(bot_id)
@@ -351,6 +351,7 @@ async def webhook_transcript(request: Request) -> JSONResponse:
                     await repo.add_conversation_entry(meeting_id, bot_id, speaker, text.strip(), "human")
                 except Exception:
                     logger.exception("Failed to persist transcript during live session")
+
             return JSONResponse(
                 {
                     "status": "received_live",

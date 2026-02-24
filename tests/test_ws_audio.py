@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 
@@ -126,6 +126,15 @@ def test_classify_by_content_empty() -> None:
 
     assert _classify_by_content("") is None
     assert _classify_by_content("abc") is None
+
+
+def test_compute_mute_seconds_bounds() -> None:
+    from bot.ws_audio import _compute_mute_seconds
+
+    assert _compute_mute_seconds(0.0) == 0.5
+    assert _compute_mute_seconds(-1.0) == 0.5
+    assert _compute_mute_seconds(1.0) == 1.6
+    assert _compute_mute_seconds(20.0) == 12.0
 
 
 def test_webhook_falls_through_when_live_not_active() -> None:

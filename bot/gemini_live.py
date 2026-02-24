@@ -61,12 +61,22 @@ class GeminiLiveSession:
         self._audio_chunks_received = 0
         self._send_error_logged = False
 
+        # Echo suppression: mute input while bot audio is playing back
+        self._mute_until: float = 0.0
+
     async def connect(self) -> None:
         """Establish connection to Gemini Live API."""
+        http_options = types.HttpOptions(
+            async_client_args={
+                "ping_interval": 30,
+                "ping_timeout": 120,
+            },
+        )
         self._client = genai.Client(
             vertexai=True,
             project=settings.gcp_project_id,
             location=settings.gcp_location,
+            http_options=http_options,
         )
 
         config = self._build_config()
@@ -108,6 +118,29 @@ class GeminiLiveSession:
             enable_affective_dialog=settings.gemini_live_enable_affective_dialog,
         )
 
+    def set_mute_duration(self, seconds: float) -> None:
+        """Mute audio input for the given duration to suppress echo."""
+        self._mute_until = time.monotonic() + seconds
+        logger.info("Echo suppression: muting input for %.1fs (bot=%s)", seconds, self.bot_id)
+
+    async def send_text(self, text: str) -> None:
+        """Send text input to Gemini Live API as user message.
+
+        Used to forward transcript text so Gemini can respond even when
+        audio-based VAD doesn't detect speech in the mixed audio stream.
+        """
+        if not self._connected or self._session is None:
+            return
+
+        try:
+            await self._session.send_client_content(
+                turns=types.Content(role="user", parts=[types.Part(text=text)]),
+                turn_complete=True,
+            )
+            logger.info("Text sent to Gemini (bot=%s): %s", self.bot_id, text[:80])
+        except Exception:
+            logger.warning("Gemini send_text failed (bot=%s)", self.bot_id, exc_info=True)
+
     async def send_audio(self, pcm_bytes: bytes) -> None:
         """Send PCM audio data to Gemini Live API.
 
@@ -115,6 +148,10 @@ class GeminiLiveSession:
             pcm_bytes: Raw PCM 16kHz 16-bit mono audio data from Recall.ai.
         """
         if not self._connected or self._session is None:
+            return
+
+        # Echo suppression: skip sending while bot's own audio is playing
+        if time.monotonic() < self._mute_until:
             return
 
         self._audio_chunks_sent += 1
@@ -134,7 +171,7 @@ class GeminiLiveSession:
                 )
         except Exception:
             if not self._send_error_logged:
-                logger.warning("Gemini send failed (bot=%s), triggering reconnect", self.bot_id)
+                logger.warning("Gemini send failed (bot=%s), triggering reconnect", self.bot_id, exc_info=True)
                 self._send_error_logged = True
                 self._connected = False
                 asyncio.create_task(self._reconnect())
