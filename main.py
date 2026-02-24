@@ -140,6 +140,19 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         except Exception:
             logger.exception("Failed to initialize Gemini Live Manager")
 
+    # Initialize local browser client (for MEETING_MODE=local)
+    app.state.browser_client = None
+    if settings.meeting_mode == "local":
+        try:
+            from bot.browser_client import BrowserClient
+
+            browser = BrowserClient()
+            await browser.launch()
+            app.state.browser_client = browser
+            logger.info("Local browser client initialized (mode=local)")
+        except Exception:
+            logger.exception("Failed to initialize local browser client")
+
     # Start meeting scheduler
     if app.state.repo:
         try:
@@ -152,6 +165,13 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     yield
 
     # Shutdown
+    if app.state.browser_client is not None:
+        try:
+            await app.state.browser_client.shutdown()
+            logger.info("Local browser client shut down")
+        except Exception:
+            logger.exception("Error shutting down local browser client")
+
     if app.state.live_manager is not None:
         try:
             await app.state.live_manager.shutdown()

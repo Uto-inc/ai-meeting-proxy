@@ -8,6 +8,7 @@ from main import app
 
 def _set_bot_test_settings() -> None:
     settings.api_key = None
+    settings.meeting_mode = "recall"
     settings.recall_api_key = "test-recall-key"
     settings.recall_base_url = "https://test.recall.ai/api/v1"
     settings.webhook_base_url = "https://my-server.example.com"
@@ -15,6 +16,7 @@ def _set_bot_test_settings() -> None:
 
 def _clear_recall_settings() -> None:
     settings.api_key = None
+    settings.meeting_mode = "recall"
     settings.recall_api_key = None
 
 

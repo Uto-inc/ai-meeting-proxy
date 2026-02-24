@@ -59,7 +59,85 @@ async def _check_and_join(repo: Any) -> None:
 
 
 async def _join_meeting(repo: Any, meeting: dict[str, Any]) -> None:
-    """Send a Recall.ai bot to join the meeting."""
+    """Send a bot to join the meeting (Recall.ai or local browser)."""
+    if settings.meeting_mode == "local":
+        await _join_meeting_local(repo, meeting)
+    else:
+        await _join_meeting_recall(repo, meeting)
+
+
+async def _join_meeting_local(repo: Any, meeting: dict[str, Any]) -> None:
+    """Join meeting using local browser + audio bridge."""
+    try:
+        # Import app state to get browser_client — scheduler doesn't have request context
+        import main as main_module
+        from bot.local_meeting import LocalMeetingSession
+        from bot.router import _bot_meeting_map, _live_manager, _local_sessions
+
+        app = getattr(main_module, "app", None)
+        browser = getattr(getattr(app, "state", None), "browser_client", None) if app else None
+        live_mgr = _live_manager
+
+        if browser is None:
+            logger.warning("Browser client not initialized, cannot auto-join locally")
+            return
+        if live_mgr is None:
+            logger.warning("Gemini Live not enabled, cannot auto-join locally")
+            return
+
+        import uuid
+
+        bot_id = str(uuid.uuid4())
+        bot_name = settings.bot_display_name
+        meeting_id = meeting["id"]
+
+        # Build system instruction
+        from bot.router import get_knowledge_base, get_persona
+
+        persona = get_persona()
+        knowledge_base = get_knowledge_base()
+
+        materials_context = ""
+        materials = await repo.list_materials(meeting_id)
+        if materials:
+            from bot.meeting_conversation import MeetingConversationSession
+
+            temp_session = MeetingConversationSession("temp", meeting_id, bot_name)
+            materials_context = temp_session.build_materials_context_from_list(materials)
+
+        knowledge_context = ""
+        if knowledge_base is not None:
+            search_query = f"{bot_name} {meeting.get('title', '')}".strip()
+            knowledge_context = knowledge_base.get_context(search_query)
+
+        if persona is not None:
+            system_instruction = persona.build_live_system_prompt(knowledge_context, materials_context)
+        else:
+            system_instruction = f"あなたは{bot_name}として会議に参加しています。自然な日本語で応答してください。"
+
+        session = LocalMeetingSession(
+            bot_id=bot_id,
+            meeting_url=meeting["meeting_url"],
+            bot_name=bot_name,
+            browser=browser,
+            live_manager=live_mgr,
+            repo=repo,
+            meeting_id=meeting_id,
+        )
+        await session.start(system_instruction)
+
+        _local_sessions[bot_id] = session
+        _bot_meeting_map[bot_id] = meeting_id
+        await repo.update_bot_status(meeting_id, bot_id, "joining")
+        logger.info("Local bot %s joining meeting %s", bot_id, meeting_id)
+
+    except Exception:
+        logger.exception("Failed to auto-join meeting %s (local)", meeting["id"])
+        await repo.update_bot_status(meeting["id"], None, "idle")
+
+
+async def _join_meeting_recall(repo: Any, meeting: dict[str, Any]) -> None:
+    """Join meeting using Recall.ai (existing behavior)."""
     try:
         from bot.recall_client import RecallClient
 

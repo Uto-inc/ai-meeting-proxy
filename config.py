@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     # Materials
     materials_upload_dir: str = Field(default="data/materials", alias="MATERIALS_UPLOAD_DIR")
 
+    # Meeting backend mode
+    meeting_mode: str = Field(default="recall", alias="MEETING_MODE")  # "recall" | "local"
+
+    # Local browser settings (MEETING_MODE=local)
+    chrome_profile_dir: str = Field(default="", alias="CHROME_PROFILE_DIR")
+    blackhole_capture_device: str = Field(default="BlackHole 2ch", alias="BLACKHOLE_CAPTURE_DEVICE")
+    blackhole_playback_device: str = Field(default="BlackHole 16ch", alias="BLACKHOLE_PLAYBACK_DEVICE")
+    local_audio_sample_rate: int = Field(default=16000, alias="LOCAL_AUDIO_SAMPLE_RATE")
+    local_audio_chunk_ms: int = Field(default=100, alias="LOCAL_AUDIO_CHUNK_MS")
+
     # Gemini Live API
     gemini_live_enabled: bool = Field(default=False, alias="GEMINI_LIVE_ENABLED")
     gemini_live_model: str = Field(default="gemini-live-2.5-flash-native-audio", alias="GEMINI_LIVE_MODEL")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 

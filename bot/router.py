@@ -23,6 +23,9 @@ _live_manager: Any = None  # GeminiLiveManager, set by main.py
 # Mapping of bot_id -> meeting_id for DB persistence
 _bot_meeting_map: dict[str, str] = {}
 
+# Local mode sessions: bot_id -> LocalMeetingSession
+_local_sessions: dict[str, Any] = {}
+
 
 def set_live_manager(manager: Any) -> None:
     """Set the module-level GeminiLiveManager reference."""
@@ -30,8 +33,10 @@ def set_live_manager(manager: Any) -> None:
     _live_manager = manager
 
 
-def _require_recall_configured() -> None:
-    """Dependency that ensures Recall.ai is configured."""
+def _require_meeting_backend() -> None:
+    """Dependency that ensures a meeting backend (Recall.ai or local) is configured."""
+    if settings.meeting_mode == "local":
+        return
     if not settings.recall_api_key:
         raise HTTPException(status_code=503, detail="Recall.ai is not configured")
 
@@ -79,9 +84,9 @@ def init_avatar_components() -> None:
 @router.post("/join")
 async def join_meeting(
     request: Request,
-    _: None = Depends(_require_recall_configured),
+    _: None = Depends(_require_meeting_backend),
 ) -> JSONResponse:
-    """Send a Recall.ai bot to join a Google Meet meeting."""
+    """Send a bot to join a Google Meet meeting (Recall.ai or local browser)."""
     body = await request.json()
     meeting_url: str | None = body.get("meeting_url")
     if not meeting_url or not meeting_url.strip():
@@ -91,6 +96,11 @@ async def join_meeting(
     bot_name: str = body.get("bot_name", settings.bot_display_name)
     meeting_id: str | None = body.get("meeting_id")
 
+    # --- Local browser mode ---
+    if settings.meeting_mode == "local":
+        return await _join_local(request, meeting_url.strip(), bot_name, meeting_id)
+
+    # --- Recall.ai mode (existing) ---
     use_live = enable_avatar and settings.gemini_live_enabled and _live_manager is not None
 
     client = _get_recall_client()
@@ -179,10 +189,66 @@ async def join_meeting(
     )
 
 
+async def _join_local(
+    request: Request,
+    meeting_url: str,
+    bot_name: str,
+    meeting_id: str | None,
+) -> JSONResponse:
+    """Join a meeting using local browser + audio bridge."""
+    from bot.local_meeting import LocalMeetingSession
+
+    browser = getattr(request.app.state, "browser_client", None)
+    if browser is None:
+        raise HTTPException(status_code=503, detail="Local browser client not initialized")
+    if _live_manager is None:
+        raise HTTPException(status_code=503, detail="Gemini Live not enabled (required for local mode)")
+
+    repo = getattr(request.app.state, "repo", None)
+    system_instruction = await _build_live_system_instruction(request, meeting_id, bot_name)
+
+    import uuid
+
+    bot_id = str(uuid.uuid4())
+    session = LocalMeetingSession(
+        bot_id=bot_id,
+        meeting_url=meeting_url,
+        bot_name=bot_name,
+        browser=browser,
+        live_manager=_live_manager,
+        repo=repo,
+        meeting_id=meeting_id,
+    )
+
+    try:
+        await session.start(system_instruction)
+    except Exception as exc:
+        logger.exception("Failed to start local meeting session (bot=%s)", bot_id)
+        raise HTTPException(status_code=502, detail="Failed to join meeting locally") from exc
+
+    _local_sessions[bot_id] = session
+
+    if meeting_id:
+        _bot_meeting_map[bot_id] = meeting_id
+        if repo:
+            await repo.update_bot_status(meeting_id, bot_id, "joining")
+
+    return JSONResponse(
+        {
+            "bot_id": bot_id,
+            "status": "joined",
+            "avatar_enabled": True,
+            "live_mode": True,
+            "local_mode": True,
+            "meeting_id": meeting_id,
+        }
+    )
+
+
 @router.get("/{bot_id}/status")
 async def bot_status(
     bot_id: str,
-    _: None = Depends(_require_recall_configured),
+    _: None = Depends(_require_meeting_backend),
 ) -> JSONResponse:
     """Check the current status of a Recall.ai bot."""
     client = _get_recall_client()
@@ -200,9 +266,22 @@ async def bot_status(
 async def leave_meeting(
     bot_id: str,
     request: Request,
-    _: None = Depends(_require_recall_configured),
+    _: None = Depends(_require_meeting_backend),
 ) -> JSONResponse:
-    """Tell a Recall.ai bot to leave the meeting."""
+    """Tell a bot to leave the meeting (Recall.ai or local browser)."""
+    # --- Local mode ---
+    if bot_id in _local_sessions:
+        session = _local_sessions.pop(bot_id)
+        try:
+            await session.stop()
+        except Exception:
+            logger.exception("Error stopping local session (bot=%s)", bot_id)
+        _bot_meeting_map.pop(bot_id, None)
+        if _conversation_manager is not None:
+            _conversation_manager.remove(bot_id)
+        return JSONResponse({"bot_id": bot_id, "detail": "Left meeting (local)", "result": {}})
+
+    # --- Recall.ai mode ---
     client = _get_recall_client()
     try:
         result = await client.leave_meeting(bot_id)
